@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI-Powered SOC Dashboard</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+        h1 { text-align: center; color: #38bdf8; }
+        .container { display: flex; gap: 20px; flex-wrap: wrap; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #1e293b; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; color: #94a3b8; }
+        .high { color: #ef4444; font-weight: bold; }
+        .medium { color: #f59e0b; }
+        .low { color: #10b981; }
+        .card { flex: 1; min-width: 400px; padding: 20px; background: #1e293b; border-radius: 8px; border: 1px solid #334155; }
+    </style>
+</head>
+<body>
+    <h1>Real-Time AI SOC Dashboard</h1>
+    <div class="container">
+        <div class="card">
+            <h2>Active Incidents (PostgreSQL)</h2>
+            <table id="incidents-table">
+                <tr><th>Incident ID</th><th>Source IP</th><th>Severity</th><th>Action Taken</th><th>Count</th></tr>
+            </table>
+        </div>
+        <div class="card">
+            <h2>Recent Events (Elasticsearch)</h2>
+            <table id="events-table">
+                <tr><th>Event ID</th><th>IP</th><th>Type</th><th>Score (XGB)</th><th>Score (LSTM)</th></tr>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = "http://localhost:8000";
+
+        async function fetchIncidents() {
+            try {
+                const res = await fetch(`${API_BASE}/incidents`);
+                const data = await res.json();
+                if (data.error) return;
+                const table = document.getElementById("incidents-table");
+                table.innerHTML = "<tr><th>Incident ID</th><th>Source IP</th><th>Severity</th><th>Action Taken</th><th>Count</th></tr>";
+                data.forEach(inc => {
+                    const sevClass = inc.severity ? inc.severity.toLowerCase() : '';
+                    table.innerHTML += `<tr>
+                        <td>${inc.incident_id}</td>
+                        <td>${inc.src_ip}</td>
+                        <td class="${sevClass}">${inc.severity}</td>
+                        <td>${inc.action}</td>
+                        <td>${inc.event_count}</td>
+                    </tr>`;
+                });
+            } catch (e) { console.error("Could not fetch incidents", e); }
+        }
+
+        async function fetchEvents() {
+            try {
+                const res = await fetch(`${API_BASE}/events?limit=10`);
+                const data = await res.json();
+                if (data.error) return;
+                const table = document.getElementById("events-table");
+                table.innerHTML = "<tr><th>Event ID</th><th>IP</th><th>Type</th><th>Score (XGB)</th><th>Score (LSTM)</th></tr>";
+                data.forEach(ev => {
+                    const score1 = (ev.stage1_score || 0).toFixed(2);
+                    const score2 = (ev.stage2_score || 0).toFixed(2);
+                    table.innerHTML += `<tr>
+                        <td>${ev.event_id.substring(0,8)}...</td>
+                        <td>${ev.src_ip}</td>
+                        <td>${ev.event_type}</td>
+                        <td>${score1}</td>
+                        <td>${score2}</td>
+                    </tr>`;
+                });
+            } catch (e) { console.error("Could not fetch events", e); }
+        }
+
+        setInterval(() => {
+            fetchIncidents();
+            fetchEvents();
+        }, 2000);
+        
+        fetchIncidents();
+        fetchEvents();
+    </script>
+</body>
+</html>

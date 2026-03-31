@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-soc-bg text-soc-text font-mono antialiased m-0 p-0 overflow-hidden;
+  }
+  
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-soc-panel;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-soc-border hover:bg-soc-muted;
+  }
+}
+
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #333333 #0A0A0A;
+}
