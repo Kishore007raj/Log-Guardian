@@ -3,9 +3,11 @@ import time
 import json
 import sqlite3
 import threading
+import socket
 from collections import deque
 from datetime import timedelta
 from queue import Queue, Empty
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Depends, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -37,7 +39,35 @@ from tests.simulate import run_simulation
 
 logger = setup_logger("orchestrator")
 
-app = FastAPI(title="AI-Powered SOC API - PRO (Local)")
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global main_loop, broadcast_queue
+    if is_port_in_use(8000):
+        logger.warning("Port 8000 already in use! Avoid multiple uvicorn instances or conflicts.")
+        
+    main_loop = asyncio.get_running_loop()
+    broadcast_queue = asyncio.Queue()
+    
+    # Auto-start the pipeline for demo-readiness
+    pipeline_state.start()
+    
+    pipeline_thread = threading.Thread(target=run_pipeline, daemon=True)
+    pipeline_thread.start()
+    
+    broadcaster_task = asyncio.create_task(websocket_broadcaster())
+    logger.info("Pipeline thread and WS broadcaster started.")
+    
+    yield
+    
+    pipeline_state.stop()
+    broadcaster_task.cancel()
+    logger.info("Application shutdown cleanly.")
+
+app = FastAPI(title="AI-Powered SOC API - PRO (Local)", lifespan=lifespan)
 
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
@@ -55,8 +85,8 @@ app.add_middleware(
 
 # Global Queue for In-Memory Messaging
 event_queue = Queue()
-# WS Broadcast
-broadcast_queue = asyncio.Queue()
+# WS Broadcast (initialized in lifespan)
+broadcast_queue = None
 main_loop = None
 
 class PipelineState:
@@ -103,14 +133,12 @@ async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Heartbeat keep-alive receive loop with timeout to prevent memory leaks
-            text = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+            # Removed wait_for timeout to prevent dropping clients that just listen
+            text = await websocket.receive_text()
             if text == "ping":
                 await websocket.send_text("pong")
-    except asyncio.TimeoutError:
-        logger.warning("WS_TIMEOUT: Client heartbeat timeout. Dropping link.")
-        ws_manager.disconnect(websocket)
     except WebSocketDisconnect:
+        logger.info("WS_DISCONNECT: Client cleanly disconnected.")
         ws_manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"WS_ERROR: Unexpected stream fault: {e}")
@@ -118,16 +146,25 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def websocket_broadcaster():
     while True:
-        msg = await broadcast_queue.get()
-        if not ws_manager.active_connections:
-            continue
-            
-        for conn in list(ws_manager.active_connections):
-            try:
-                await conn.send_text(msg)
-            except Exception as e:
-                logger.warning(f"WS_BROADCAST_FAILURE: Failed to dispatch to client: {e}")
-                ws_manager.disconnect(conn)
+        try:
+            if broadcast_queue is None:
+                await asyncio.sleep(1)
+                continue
+                
+            msg = await broadcast_queue.get()
+            if not ws_manager.active_connections:
+                continue
+                
+            for conn in list(ws_manager.active_connections):
+                try:
+                    await conn.send_text(msg)
+                except Exception as e:
+                    logger.warning(f"WS_BROADCAST_FAILURE: Failed to dispatch to client: {e}")
+                    ws_manager.disconnect(conn)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"WS_BROADCAST_ERROR: {e}")
 
 # DB Helper
 def get_sqlite_conn():
@@ -329,6 +366,8 @@ def run_pipeline():
             if not batch:
                 continue
 
+            logger.info(f"PIPELINE_CHECKPOINT: Event received. Processing batch of {len(batch)} events")
+
             valid_events = []
             
             # STEP 1: Process sequential normalizations and sliding windows
@@ -344,6 +383,8 @@ def run_pipeline():
             if not valid_events:
                 continue
                 
+            logger.info(f"PIPELINE_CHECKPOINT: Feature processed for {len(valid_events)} events")
+                
             # STEP 2: Mathematical Bulk Batching for Inference engines
             with DETECTION_LATENCY.time():
                 try:
@@ -354,6 +395,8 @@ def run_pipeline():
                     valid_events = lstm_detector.detect_batch(valid_events)
                 except Exception as ex:
                     logger.error(f"LSTM pipeline fail-safe isolated: {ex}")
+            
+            logger.info(f"PIPELINE_CHECKPOINT: Model output completed for {len(valid_events)} events")
             
             # Record events processed
             with pipeline_state.lock:
@@ -373,6 +416,7 @@ def run_pipeline():
                         for attempt in range(3):
                             try:
                                 sqlite_client.store_incident(event)
+                                logger.info(f"PIPELINE_CHECKPOINT: Incident created - {event.incident_id}")
                                 break
                             except Exception as db_ex:
                                 time.sleep(0.5 * (attempt + 1))
@@ -406,17 +450,6 @@ def run_pipeline():
         logger.error(f"Pipeline failed: {e}")
     finally:
         sqlite_client.close()
-
-@app.on_event("startup")
-async def startup_event():
-    global main_loop
-    main_loop = asyncio.get_running_loop()
-    
-    pipeline_thread = threading.Thread(target=run_pipeline, daemon=True)
-    pipeline_thread.start()
-    
-    asyncio.create_task(websocket_broadcaster())
-    logger.info("Pipeline thread and WS broadcaster started.")
 
 if __name__ == "__main__":
     logger.info("SYSTEM_READY: CloudSentinel API initializing on http://127.0.0.1:8000")
