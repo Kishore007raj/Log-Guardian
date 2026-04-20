@@ -59,6 +59,29 @@ event_queue = Queue()
 broadcast_queue = asyncio.Queue()
 main_loop = None
 
+class PipelineState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.is_running = False
+        self.events_processed = 0
+        self.start_time = None
+        self.time_limit = None
+        self.event_limit = None
+
+    def start(self, time_limit=None, event_limit=None):
+        with self.lock:
+            self.is_running = True
+            self.start_time = time.time()
+            self.time_limit = time_limit
+            self.event_limit = event_limit
+            self.events_processed = 0
+
+    def stop(self):
+        with self.lock:
+            self.is_running = False
+
+pipeline_state = PipelineState()
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections = []
@@ -80,8 +103,13 @@ async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Keep-alive receive loop
-            await websocket.receive_text()
+            # Heartbeat keep-alive receive loop with timeout to prevent memory leaks
+            text = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+            if text == "ping":
+                await websocket.send_text("pong")
+    except asyncio.TimeoutError:
+        logger.warning("WS_TIMEOUT: Client heartbeat timeout. Dropping link.")
+        ws_manager.disconnect(websocket)
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
     except Exception as e:
@@ -206,6 +234,58 @@ async def trigger_simulation(request: Request, sim: SimRequest, background_tasks
     except Exception as e:
         return {"error": f"Failed to start simulator: {str(e)}"}
 
+@app.post("/api/start")
+async def api_start_pipeline(time_limit: int = None, event_limit: int = None):
+    pipeline_state.start(time_limit, event_limit)
+    return {"status": "started", "limits": {"time": time_limit, "events": event_limit}}
+
+@app.post("/api/stop")
+async def api_stop_pipeline():
+    pipeline_state.stop()
+    return {"status": "stopped"}
+
+@app.get("/api/status")
+async def api_pipeline_status():
+    return {
+        "is_running": pipeline_state.is_running,
+        "events_processed": pipeline_state.events_processed,
+        "run_time": (time.time() - pipeline_state.start_time) if pipeline_state.is_running and pipeline_state.start_time else 0
+    }
+
+@app.get("/api/system/metrics")
+async def api_system_metrics():
+    return {
+        "queue_size": event_queue.qsize(),
+        "processing_latency_avg": "available via /metrics (prometheus)",
+        "pipeline_active": pipeline_state.is_running
+    }
+
+@app.get("/api/report/generate")
+async def generate_report():
+    conn = get_sqlite_conn()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT severity, COUNT(*) FROM incidents GROUP BY severity")
+    sev_dist = {row[0]: row[1] for row in cursor.fetchall()}
+    
+    cursor.execute("SELECT SUM(event_count) FROM incidents")
+    inc_count_res = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM incidents")
+    unique_incidents = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT src_ip, event_count FROM incidents ORDER BY event_count DESC LIMIT 5")
+    top_attackers = [{"ip": row[0], "count": row[1]} for row in cursor.fetchall()]
+    conn.close()
+    
+    return {
+        "status": "success",
+        "incidents_count": unique_incidents or 0,
+        "total_event_hits": inc_count_res or 0,
+        "severity_distribution": sev_dist,
+        "top_attackers": top_attackers
+    }
+
 def run_pipeline():
     logger.info("Starting AI SOC Pipeline (Local Edition)...")
     
@@ -221,6 +301,20 @@ def run_pipeline():
 
     try:
         while True:
+            if not pipeline_state.is_running:
+                time.sleep(1.0)
+                continue
+                
+            with pipeline_state.lock:
+                if pipeline_state.time_limit and (time.time() - pipeline_state.start_time) > pipeline_state.time_limit:
+                    pipeline_state.is_running = False
+                    logger.info("Pipeline time limit reached. Stopped gracefully.")
+                    continue
+                if pipeline_state.event_limit and pipeline_state.events_processed >= pipeline_state.event_limit:
+                    pipeline_state.is_running = False
+                    logger.info("Pipeline event limit reached. Stopped gracefully.")
+                    continue
+
             batch = []
             try:
                 # Batch 100 events or block for 1 second if empty
@@ -252,8 +346,18 @@ def run_pipeline():
                 
             # STEP 2: Mathematical Bulk Batching for Inference engines
             with DETECTION_LATENCY.time():
-                valid_events = xgb_detector.detect_batch(valid_events)
-                valid_events = lstm_detector.detect_batch(valid_events)
+                try:
+                    valid_events = xgb_detector.detect_batch(valid_events)
+                except Exception as ex:
+                    logger.error(f"XGBoost pipeline fail-safe isolated: {ex}")
+                try:
+                    valid_events = lstm_detector.detect_batch(valid_events)
+                except Exception as ex:
+                    logger.error(f"LSTM pipeline fail-safe isolated: {ex}")
+            
+            # Record events processed
+            with pipeline_state.lock:
+                pipeline_state.events_processed += len(valid_events)
             
             # STEP 3: Correlate, Grade, and React
             processed_events = []
@@ -265,10 +369,18 @@ def run_pipeline():
                     processed_events.append(event)
                     
                     if event.incident_id:
-                        sqlite_client.store_incident(event)
+                        # Fail-safe retry logic for Incident storage
+                        for attempt in range(3):
+                            try:
+                                sqlite_client.store_incident(event)
+                                break
+                            except Exception as db_ex:
+                                time.sleep(0.5 * (attempt + 1))
+                                if attempt == 2:
+                                    logger.error(f"SQLite final retry failed: {db_ex}")
                         INCIDENTS_CREATED_TOTAL.inc()
                 except Exception as ex:
-                    logger.error(f"Pipeline correlation error: {ex}")
+                    logger.error(f"Pipeline correlation error isolated: {ex}")
             
             # STEP 4: Async Bulk Index Data Storage
             if processed_events:
@@ -280,7 +392,14 @@ def run_pipeline():
                     except Exception as loop_ex:
                         logger.error(f"Failed to queue WS broadcast: {loop_ex}")
                         
-                json_client.store_batch(processed_events)
+                for attempt in range(3):
+                    try:
+                        json_client.store_batch(processed_events)
+                        break
+                    except Exception as fj_ex:
+                        time.sleep(0.5 * (attempt + 1))
+                        if attempt == 2: logger.error(f"JSON final retry failed: {fj_ex}")
+                
                 EVENTS_PROCESSED_TOTAL.inc(len(processed_events))
 
     except Exception as e:

@@ -27,4 +27,11 @@ class Config:
     SLIDING_WINDOW_SEC = int(os.getenv("SLIDING_WINDOW_SEC", "60"))
     INCIDENT_THRESHOLD = int(os.getenv("INCIDENT_THRESHOLD", "3"))
 
+    # Alert Integrations
+    SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+    SMTP_HOST = os.getenv("SMTP_HOST", "")
+    SMTP_USER = os.getenv("SMTP_USER", "")
+    SMTP_PASS = os.getenv("SMTP_PASS", "")
+    ALERT_COOLDOWN_SEC = int(os.getenv("ALERT_COOLDOWN_SEC", "300"))
+
 config = Config()
