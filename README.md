@@ -1,67 +1,107 @@
-# 🚀 Log Guardian: AI SOC Pipeline (Local Edition)
+# 🛡️ Log Guardian: AI-Powered SOC Suite
 
-This project is a high-performance, lightweight SOC pipeline designed for real-time threat detection and incident management. 
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/Frontend-React-61DAFB?style=for-the-badge&logo=react)](https://reactjs.org/)
+[![XGBoost](https://img.shields.io/badge/AI-XGBoost%20%2B%20BiLSTM-EE4C2C?style=for-the-badge)](https://xgboost.readthedocs.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-> [!IMPORTANT]
-> The system has been refactored to run locally without Kafka, Elasticsearch, or PostgreSQL.
-> All processing now occurs in-memory (Python Queue) and persistent storage uses local SQLite (`soc.db`) and JSON lines (`events.json`).
-
----
-
-## 🛠️ Prerequisites
-- **Python 3.10+**
-- **Node.js 18+**
+**Log Guardian** is a high-performance, lightweight SOC (Security Operations Center) pipeline engineered for real-time threat detection and incident response. It combines modern web technologies with deep learning models to process thousands of security events locally with minimal overhead.
 
 ---
 
-## 🏃 Step-by-Step Execution
+## ✨ Key Features
 
-### 1. Backend Setup (API & Pipeline)
-Open a terminal in the root directory and run:
+-   **⚡ Real-Time Pipeline**: Asynchronous event ingestion using Python Queues and `asyncio` broadcaster.
+-   **🧠 Dual-Stage ML Detection**: 
+    -   **Stage 1**: XGBoost for high-speed signature-based anomaly detection.
+    -   **Stage 2**: Bi-LSTM (PyTorch) for sequential analysis of attack patterns.
+-   **📊 Modern Dashboard**: Polished React interface with live data streaming via WebSockets.
+-   **🛠️ Zero External Deps**: Runs entirely locally using **SQLite** and **JSONL** persistence—no Kafka or Elasticsearch required.
+-   **🚨 Incident Management**: Automated correlation engine that groups related events into actionable incidents.
 
+---
+
+## 🏗️ System Architecture
+
+```mermaid
+graph TD
+    A[Event Simulator] -->|JSON| B[FastAPI Ingestion]
+    B -->|Queue| C[Processing Engine]
+    subgraph "AI Pipeline"
+        C --> D[Normalization]
+        D --> E[Feature Extractor]
+        E --> F[XGBoost Detection]
+        F --> G[LSTM Sequence Analysis]
+    end
+    G --> H[Correlation Engine]
+    H --> I[Severity Scoring]
+    I --> J[(SQLite: Incidents)]
+    I --> K[(JSONL: Event Arch)]
+    J --> L[WebSocket Broadcaster]
+    K --> L
+    L -->|Real-time| M[React Dashboard]
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Backend Engine
 ```bash
-# Install backend dependencies
+# Clone the repository
+cd "Log Guardian/log guardian"
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Start the Backend & Processing Pipeline
+# Start the core engine
 python main.py
 ```
-> The backend runs on `http://localhost:8000`. It automatically starts the ingestion queue and background processing.
+> **Backend URL**: [http://localhost:8000](http://localhost:8000)  
+> **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 
----
-
-### 2. Frontend Setup (React Dashboard)
-Open a **new** terminal in the root directory:
-
+### 2. Monitoring Dashboard
 ```bash
-# Navigate to frontend folder
 cd frontend
-
-# Install frontend dependencies (needed if running for first time)
 npm install
-
-# Start the dashboard
 npm run dev
 ```
-> The dashboard will be accessible at `http://localhost:5173`. It connects to the backend API automatically.
+> **Dashboard URL**: [http://localhost:5173](http://localhost:5173)
 
 ---
 
-### 3. Testing the Pipeline (Simulate Attacks)
-To see the system in action, trigger the simulation:
-- **UI**: Click the "Simulate Attack" or "Run Simulation" button in the Dashboard.
-- **REST API**: Or, run this command from any terminal:
-  ```bash
-  # Windows PowerShell
-  Invoke-RestMethod -Uri "http://localhost:8000/api/simulate" -Method Post -Body '{"num_events": 1000}' -ContentType "application/json"
-  ```
+## 🧪 Simulation & Testing
+
+To see the AI models identify threats in real-time, you can trigger a high-volume attack simulation:
+
+**via PowerShell:**
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/simulate" -Method Post -Body '{"num_events": 1000}' -ContentType "application/json"
+```
+
+**via CURL:**
+```bash
+curl -X POST http://localhost:8000/api/simulate -H "Content-Type: application/json" -d '{"num_events": 1000}'
+```
+
 ---
 
-## 📂 Project Structure (Local Edition)
-- `main.py`: Dual-role orchestrator (FastAPI + Pipeline threading).
-- `storage/`: Contains SQLite and JSON clients for lightweight storage.
-- `detection/`: XGBoost and LSTM inference engines.
-- `processing/`: Real-time feature extraction and sliding windows.
-- `frontend/`: Modern React dashboard with polished visualizations.
-- `soc.db`: Local SQLite database for incidents.
-- `events.json`: Local storage for all security events.
+## 📂 Project Organization
+
+| Directory | Purpose |
+| :--- | :--- |
+| `api/` | FastAPI routes, Auth, and WebSocket logic |
+| `detection/` | Inference engines (XGBoost & LSTM) |
+| `processing/` | Normalization and real-time Feature Engineering |
+| `correlation/` | Logic for grouping events into high-level Incidents |
+| `storage/` | Lightweight persistence drivers (SQLite/JSON) |
+| `frontend/` | React source code and Vite configuration |
+
+---
+
+## 🛡️ Security Note
+This "Local Edition" is designed for demonstration and educational purposes. Sensitive files like `soc.db`, `events.json`, and local model binaries are excluded from version control via `.gitignore` to maintain environment cleanliness.
+
+---
+
+© 2026 Log Guardian Team. Built for modern security engineering.

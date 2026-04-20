@@ -9,7 +9,8 @@ import ConnectivityOverlay from '../components/ConnectivityOverlay';
 import { useSocStore } from '../store/useSocStore';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { API_BASE, HEALTH_CHECK_INTERVAL } from '../config';
-import { Crosshair } from 'lucide-react';
+import { Crosshair, Play, Square, FileText } from 'lucide-react';
+import { startPipeline, stopPipeline, fetchReport } from '../services/api';
 
 export default function Dashboard() {
   const { fetchHealth, fetchIncidents } = useSocStore();
@@ -44,7 +45,25 @@ export default function Dashboard() {
       <SystemBar />
 
       <div className="flex justify-between items-center px-4 py-2 border-b border-soc-border bg-[#000]">
-         <div className="text-soc-muted text-xs tracking-widest uppercase">Target Defense Matrix</div>
+         <div className="text-soc-muted text-xs tracking-widest uppercase flex gap-4">
+            <span>Target Defense Matrix</span>
+            <div className="flex gap-2">
+               <button onClick={startPipeline} className="bg-soc-success/20 text-soc-success hover:bg-soc-success hover:text-white px-2 py-0.5 rounded text-[10px] flex items-center gap-1 border border-soc-success">
+                  <Play size={10} /> START 
+               </button>
+               <button onClick={stopPipeline} className="bg-soc-danger/20 text-soc-danger hover:bg-soc-danger hover:text-white px-2 py-0.5 rounded text-[10px] flex items-center gap-1 border border-soc-danger">
+                  <Square size={10} /> STOP
+               </button>
+               <button 
+                  onClick={async () => {
+                     const r = await fetchReport();
+                     if (r) alert(JSON.stringify(r, null, 2));
+                  }} 
+                  className="bg-soc-accent/20 text-soc-accent hover:bg-soc-accent hover:text-white px-2 py-0.5 rounded text-[10px] flex items-center gap-1 border border-soc-accent">
+                  <FileText size={10} /> REPORT
+               </button>
+            </div>
+         </div>
          <button 
            onClick={handleSimulate}
            disabled={isSimulating}

@@ -30,4 +30,8 @@ export const fetchIncidents = () => api.get('/incidents').then(r => r.data).catc
 export const fetchHealth = () => api.get('/system/health').then(r => r.data).catch(() => ({ status: 'offline' }));
 export const simulateAttack = (num = 1000) => api.post('/simulate', { num_events: num }).catch(() => null);
 
+export const startPipeline = () => api.post('/start').then(r => r.data).catch(() => null);
+export const stopPipeline = () => api.post('/stop').then(r => r.data).catch(() => null);
+export const fetchReport = () => api.get('/report/generate').then(r => r.data).catch(() => null);
+
 export default api;
